@@ -8,6 +8,8 @@ tasks:
   - init: |
       #go get && go build ./... && go test ./...
       echo "init"
+      go install golang.org/x/tools/gopls@latest
+      go install github.com/go-delve/delve/cmd/dlv@latest
     command: |
       #go run .
       echo "command"
