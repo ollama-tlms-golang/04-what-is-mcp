@@ -1,4 +1,4 @@
-module hello-mcp
+module hello-mcp-server
 
 go 1.23.4
 

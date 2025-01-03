@@ -11,9 +11,11 @@ import (
 func main() {
     // Create MCP server
     s := server.NewMCPServer(
-        "Demo 🚀",
+        "hello-mcp-server",
         "1.0.0",
     )
+
+    //mcp.Tool
 
     // Add tool
     tool := mcp.NewTool("hello_world",
@@ -27,13 +29,16 @@ func main() {
     // Add tool handler
     s.AddTool(tool, helloHandler)
 
+    fmt.Println("👋 Server started")
     // Start the stdio server
     if err := server.ServeStdio(s); err != nil {
         fmt.Printf("Server error: %v\n", err)
     }
+    fmt.Println("Server stopped")
 }
 
 func helloHandler(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+
     name, ok := request.Params.Arguments["name"].(string)
     if !ok {
         return mcp.NewToolResultError("name must be a string"), nil

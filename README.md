@@ -1,174 +1,88 @@
-# "Tool Calling" and Ollama
+# Understanding the Model Context Protocol (MCP) and Its Use with Claude Desktop, Ollama, and Docker
 
-## Prerequisites
+## Definition
 
-You should have read the previous article [Developing Generative AI Applications in Go with Ollama](https://k33g.hashnode.dev/developing-generative-ai-applications-in-go-with-ollama-and-tiny-models) to understand the basics of using Ollama and baby LLMs.
+> **Pre-requisite**: read my blog post about ["Tool Calling" and Ollama](https://k33g.hashnode.dev/tool-calling-and-ollama).
 
-For this new article, we'll use a this LLM, **[qwen2.5:1.5b](https://ollama.com/library/qwen2.5:1.5b)**. So run the following command to download it:
+The MCP is an open protocol that standardizes how applications provide context to Large Language Models (LLMs). MCP provides a standardized way to connect AI models with various data sources and tools.
 
-```bash
-ollama pull qwen2.5:1.5b
+This protocol was [defined by Anthropic](https://www.anthropic.com/news/model-context-protocol), and one of the first implementations is **"[Claude Desktop](https://claude.ai/download)"**. Claude Desktop is an application that enables Anthropic's Claude AI model to interact with your computer using the MCP protocol.
+
+## General Architecture
+
+The Model Context Protocol uses a client-server architecture where a host application can connect to multiple servers:
+
+1. **MCP Hosts**: These are generative AI applications using LLMs that want to access external resources via MCP. Claude Desktop is an example of a host application.
+
+2. **MCP Clients**: Protocol clients that maintain 1:1 connections with servers (and the client is used by MCP host applications).
+
+3. **MCP Servers**: Programs that expose specific functionalities through the MCP protocol using local or remote data sources.
+
+The MCP protocol offers two main transport models: **STDIO** (Standard Input/Output) and **SSE** (Server-Sent Events). Both use JSON-RPC 2.0 as the message format for data transmission.
+
+The first model, **STDIO**, communicates through standard input/output streams. It's ideal for local integrations. The second model, **SSE**, uses HTTP requests for communication, with SSE for server-to-client communications and POST requests for client-to-server communication. It's better suited for remote integrations.
+
+
+```mermaid
+flowchart TD
+  subgraph Host["MCP Host (AI Application)"]
+      App["Application LLM\n(e.g., Claude Desktop)"]
+  end
+
+  subgraph Client["MCP Client"]
+      Protocol["Protocol Client\n1:1 connections"]
+  end
+
+  subgraph Servers["MCP Servers"]
+      Server1["Server 1\n(Local Data)"]
+      Server2["Server 2\n(Remote Data)"]
+  end
+
+  App --> Protocol
+  Protocol <--> |STDIO\nJSON-RPC 2.0| Server1
+  Protocol <--> |SSE\nJSON-RPC 2.0| Server2
+
 ```
 
-## Introduction
+> The protocol includes provisions for adding additional transport models in the future.
 
-In July 2024, Ollama announced support for tool calling (also known as function calling) for LLMs that supported it. So, what is tool calling?
+## Operation
 
-## Explanations
-
-For models that support tool calling, the principle is to provide a list of tools to the model. For example, below I explain to the model that it has a `say_hello` function and an `add_numbers` function:
+The MCP server exposes functionalities to the host application via the MCP protocol (this could be a list of available tools, such as addition and subtraction).
 
 ```json
- "tools": [
+tools: [
     {
-      "function": {
-        "description": "Say hello to a given person with his name",
-        "name": "say_hello",
-        "parameters": {
-          "properties": {
-            "name": {
-              "description": "The name of the person",
-              "type": "string"
-            }
-          },
-          "required": [
-            "name"
-          ],
-          "type": "object"
-        }
-      },
-      "type": "function"
-    },
-    {
-      "function": {
-        "description": "Add two numbers",
-        "name": "add_numbers",
-        "parameters": {
-          "properties": {
-            "number1": {
-              "description": "The first number",
-              "type": "number"
+        name: "add_numbers",
+        description: "Add two numbers together",
+        inputSchema: {
+            type: "object",
+            properties: {
+                a: { type: "number" },
+                b: { type: "number" }
             },
-            "number2": {
-              "description": "The second number",
-              "type": "number"
-            }
-          },
-          "required": [
-            "number1",
-            "number2"
-          ],
-          "type": "object"
+            required: ["a", "b"]
         }
-      },
-      "type": "function"
-    }
-  ]
-}
-```
-
-From this list, when I send a prompt to the model with messages like `"Say hello to Bob"`, `"add 28 to 12"`, the LLM will know how to detect the function (or tool) call pattern and provide me with the name of the function to call and extract the parameters to pass to it.
-
-### For example
-
-For example, for a prompt like this:
-
-```json
-  "messages": [
-    {
-      "role": "user",
-      "content": "Say hello to Bob"
     },
     {
-      "role": "user",
-      "content": "add 28 to 12"
-    },
-    {
-      "role": "user",
-      "content": "Say hello to Sarah"
+        name: "subtract_numbers",
+        description: "Subtract two numbers together",
+        inputSchema: {
+            type: "object",
+            properties: {
+                a: { type: "number" },
+                b: { type: "number" }
+            },
+            required: ["a", "b"]
+        }
     }
-  ]
-```
-
-The model will detect three function calls and provide me with the function calls to execute:
-
-```json
-"tool_calls": [
-	{
-	"function": {
-		"name": "say_hello",
-		"arguments": {
-		"name": "Bob"
-		}
-	}
-	},
-	{
-	"function": {
-		"name": "add_numbers",
-		"arguments": {
-		"number1": 12,
-		"number2": 28
-		}
-	}
-	},
-	{
-	"function": {
-		"name": "say_hello",
-		"arguments": {
-		"name": "Sarah"
-		}
-	}
-	}
 ]
 ```
 
-**Note**: It's important to note that the model doesn't know how to execute the functions, it just extracts them. It's up to you to implement these functions.
+The host application formats this list into a similar list that is comprehensible by the LLM:
 
-## Using Curl and Ollama
-
-One of my favorite models that supports tool calling is the `qwen2.5:1.5b` model (theoretically its smaller sibling `qwen2.5:0.5b` also supports tool calling, but much less effectively). You can test it very easily with a simple `curl` command (and install `jq` to format the JSON, it will look nicer):
-
-```bash
-#!/bin/bash 
-SERVICE_URL="http://localhost:11434"
-read -r -d '' DATA <<- EOM
-{
-  "model": "qwen2.5:1.5b",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Say hello to Bob"
-    },
-    {
-      "role": "user",
-      "content": "add 28 to 12"
-    },
-    {
-      "role": "user",
-      "content": "Say hello to Sarah"
-    }
-  ],
-  "stream": false,
-  "tools": [
-    {
-      "function": {
-        "description": "Say hello to a given person with his name",
-        "name": "say_hello",
-        "parameters": {
-          "properties": {
-            "name": {
-              "description": "The name of the person",
-              "type": "string"
-            }
-          },
-          "required": [
-            "name"
-          ],
-          "type": "object"
-        }
-      },
-      "type": "function"
-    },
+```json
+"tools": [
     {
       "function": {
         "description": "Add two numbers",
@@ -192,265 +106,201 @@ read -r -d '' DATA <<- EOM
         }
       },
       "type": "function"
-    }
+    },
+    {
+      "function": {
+        "description": "Subtract two numbers",
+        "name": "subtract_numbers",
+        "parameters": {
+          "properties": {
+            "number1": {
+              "description": "The first number",
+              "type": "number"
+            },
+            "number2": {
+              "description": "The second number",
+              "type": "number"
+            }
+          },
+          "required": [
+            "number1",
+            "number2"
+          ],
+          "type": "object"
+        }
+      },
+      "type": "function"
+    },
   ]
 }
-EOM
+```
 
-curl --no-buffer ${SERVICE_URL}/api/chat \
-    -H "Content-Type: application/json" \
-    -d "${DATA}" | jq '.'
-``` 
+Using the tools list, the host application can generate a prompt for the model. For example: **the tools list + `"add 12 and 28"`**.
 
-And you'll get a result similar to this:
+The LLM (if it supports tools) can understand the prompt and extract the numbers, recognizing that it's an addition operation, and respond with a JSON result of this type:
+
+```json
+"tool_calls": [
+    {
+        "function": {
+            "name": "add_numbers",
+            "arguments": {
+                "number1": 12,
+                "number2": 28
+            }
+        }
+    }
+]
+```
+
+From this result, the host application constructs a new message for the MCP server that will execute the `add_numbers` tool:
 
 ```json
 {
-  "model": "qwen2.5:1.5b",
-  "created_at": "2024-12-23T09:01:42.086686Z",
-  "message": {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "function": {
-          "name": "say_hello",
-          "arguments": {
-            "name": "Bob"
-          }
-        }
-      },
-      {
-        "function": {
-          "name": "add_numbers",
-          "arguments": {
-            "number1": 28,
-            "number2": 12
-          }
-        }
-      },
-      {
-        "function": {
-          "name": "say_hello",
-          "arguments": {
-            "name": "Sarah"
-          }
-        }
-      }
-    ]
-  },
-  "done_reason": "stop",
-  "done": true,
-  "total_duration": 3157877875,
-  "load_duration": 579550042,
-  "prompt_eval_count": 244,
-  "prompt_eval_duration": 1794000000,
-  "eval_count": 70,
-  "eval_duration": 580000000
+  "name":"add_numbers",
+  "arguments": {
+    "number1":28,
+    "number2":14
+  }
 }
 ```
 
-Now let's see how to do the same thing in Go with the Ollama Go API.
+Finally, the MCP server responds with the operation result, which can be used by the host application:
 
-## Using the Ollama Go API for Tool Calling
-
-Here's the complete Go code to do the same thing as the previous `curl` script (explanations follow):
-
-```golang
-package main
-
-import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"log"
-	"net/http"
-	"net/url"
-	"os"
-
-	"github.com/ollama/ollama/api"
-)
-
-var (
-	FALSE = false
-	TRUE  = true
-)
-
-func main() {
-	ctx := context.Background()
-
-	var ollamaRawUrl string
-	if ollamaRawUrl = os.Getenv("OLLAMA_HOST"); ollamaRawUrl == "" {
-		ollamaRawUrl = "http://localhost:11434"
-	}
-
-	var toolsLLM string
-	if toolsLLM = os.Getenv("TOOLS_LLM"); toolsLLM == "" {
-		toolsLLM = "qwen2.5:1.5b"
-	}
-
-	url, _ := url.Parse(ollamaRawUrl)
-
-	client := api.NewClient(url, http.DefaultClient)
-
-	// Define some tools
-	helloTool := map[string]any{
-		"type": "function",
-		"function": map[string]any{
-			"name":        "hello",
-			"description": "Say hello to a given person with his name",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"name": map[string]any{
-						"type":        "string",
-						"description": "The name of the person",
-					},
-				},
-				"required": []string{"name"},
-			},
-		},
-	}
-
-	addNumbersTool := map[string]any{
-		"type": "function",
-		"function": map[string]any{
-			"name":        "add_numbers",
-			"description": "Add two numbers",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"number1": map[string]any{
-						"type":        "number",
-						"description": "The first number",
-					},
-					"number2": map[string]any{
-						"type":        "number",
-						"description": "The second number",
-					},
-				},
-				"required": []string{"number1", "number2"},
-			},
-		},
-	}
-
-	tools := []any{helloTool, addNumbersTool}
-	// transform tools to json
-	jsonTools, _ := json.Marshal(tools)
-
-	// Unmarshal tools to create the tools list
-	var toolsList api.Tools
-	jsonErr := json.Unmarshal(jsonTools, &toolsList)
-	if jsonErr != nil {
-		log.Fatalln("😡", jsonErr)
-	}
-
-	// Prompt construction
-	messages := []api.Message{
-		{Role: "user", Content: "Say hello to Bob"},
-		{Role: "user", Content: "add 28 to 12"},
-		{Role: "user", Content: "Say hello to Sarah"},
-	}
-
-	req := &api.ChatRequest{
-		Model: toolsLLM,
-		Messages: messages,
-		Options: map[string]interface{}{
-			"temperature":   0.0,
-			"repeat_last_n": 2,
-		},
-		Tools:  toolsList,
-		Stream: &FALSE,
-	}
-
-	err := client.Chat(ctx, req, func(resp api.ChatResponse) error {
-
-		for _, toolCall := range resp.Message.ToolCalls {
-			fmt.Println(toolCall.Function.Name, toolCall.Function.Arguments)
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		log.Fatalln("😡", err)
-	}
+```json
+{
+  "result": 42
 }
 ```
 
-### Explanations
 
-Here's a step-by-step explanation of the code:
+```mermaid
+sequenceDiagram
+    participant MCP Server
+    participant Host App
+    participant LLM
 
-1. **Tool Definition**
-- **First tool**: `helloTool`
-  - Function to say hello to someone
-  - Takes a "name" parameter of type string
-  - Example: "Say hello to Bob"
-
-- **Second tool**: `addNumbersTool`
-  - Function to add two numbers
-  - Takes two parameters "number1" and "number2"
-  - Example: "add 28 to 12"
-
-2. **Message Preparation for the prompt**
-```go
-messages := []api.Message{
-    {Role: "user", Content: "Say hello to Bob"},
-    {Role: "user", Content: "add 28 to 12"},
-    {Role: "user", Content: "Say hello to Sarah"},
-}
+    MCP Server->>Host App: Expose tools (add_numbers, subtract_numbers)
+    Host App->>Host App: Format tools for LLM
+    Host App->>LLM: Send prompt + formatted tools
+    Note over LLM: Process request
+    LLM->>Host App: Return tool_calls JSON
+    Host App->>MCP Server: Convert and send tool request
+    MCP Server->>Host App: Return operation result
 ```
 
-3. **Request Configuration**
-```go
-req := &api.ChatRequest{
-    Model: toolsLLM,                 // Model to use (qwen2.5:1.5b)
-    Messages: messages,              // List of messages
-    Options: map[string]interface{}{
-        "temperature": 0.0,          
-        "repeat_last_n": 2,          
-    },
-    Tools: toolsList,                // List of available tools
-    Stream: &FALSE,                  // No response streaming
-}
-```
+### Key Advantages of MCP:
 
-4. **Sending and Processing the Request**
-```go
-err := client.Chat(ctx, req, func(resp api.ChatResponse) error {
-    // For each tool call in the response
-    for _, toolCall := range resp.Message.ToolCalls {
-        // Display the function name and its arguments
-        fmt.Println(toolCall.Function.Name, toolCall.Function.Arguments)
+- Standardization: A uniform way to connect LLMs to different data sources
+- Flexibility / Extensibility:
+  - Ability to change LLM providers
+  - Ability to change, add, or modify MCP servers
+- Security: Data protection within your infrastructure
+- Reusability: MCP servers can be used across different projects
+
+## Using a Docker Hub MCP Server with Claude Desktop
+
+You can find ready-to-use MCP servers on **Docker Hub**: https://hub.docker.com/u/mcp. For example, the **SQLite** MCP server is available on Docker Hub at the following address: https://hub.docker.com/r/mcp/sqlite.
+
+To use this Docker Hub MCP server with Claude Desktop, you need to add a configuration in a `claude_desktop_config.json` file to tell Claude Desktop how to start the MCP server. Here's an example configuration for the SQLite MCP server:
+
+```json
+{
+  "mcpServers": {
+    "sqlite": {
+      "command": "docker",
+      "args": [
+          "run",
+          "--rm",
+          "-i",
+          "-v",
+          "mcp-test:/mcp",
+          "mcp/sqlite",
+          "--db-path",
+          "/mcp/test.db"
+      ]
     }
-    return nil
-})
+  }
+}
 ```
 
-This code allows you to:
-1. Connect to a local Ollama server
-2. Define two tools (functions) available to the model
-3. Send three messages requesting to use these tools
-4. Retrieve and display the tool call results
+> You can add multiple MCP servers to this configuration. For more information about Claude Desktop configuration, consult the official documentation: https://modelcontextprotocol.io/quickstart/user
 
-All you need to do now is run the code to see the results.
+This will allow you to see the available tools in **Claude Desktop**:
 
-### Execution
+[!Claude Desktop](imgs/claude-ai-00.png)
+
+And then interact with the available tools:
+
+[!Claude Desktop](imgs/claude-ai-01.png)
+
+> In this example, I asked Claude Desktop to create a `buddies` table in the SQLite database and add 3 records to it.
+
+✋ Note that it's entirely possible to do the same thing with a local LLM served by **Ollama**.
+
+## Using the SQLite MCP Server with Ollama and a Local LLM
+
+As I'm particularly fond of Go, I searched for an MCP CLI written in Go and found `mcphost` by **Mark3Labs** (https://github.com/mark3labs/mcphost). You can install it using the following command:
 
 ```bash
-go run main.go
+go install github.com/mark3labs/mcphost@latest
 ```
 
-And you'll get the following results:
+Next, create a configuration file `mcp.json` to tell `mcphost` how to start the SQLite MCP server:
+
+```json
+{
+  "mcpServers": {
+    "sqlite": {
+      "command": "docker",
+      "args": [
+          "run",
+          "--rm",
+          "-i",
+          "-v",
+          "mcp-test:/mcp",
+          "mcp/sqlite",
+          "--db-path",
+          "/mcp/test.db"
+      ]
+    }
+  }
+}
+```
+
+Now, you can start `mcphost` with the following command:
 
 ```bash
-hello map[name:Bob]
-add_numbers map[number1:28 number2:12]
-hello map[name:Sarah]
+mcphost --config ./mcp.json --model ollama:qwen2.5:3b
 ```
 
-There you have it, now you know how to use tool calling with Ollama. 
+> Of course, you'll need to have downloaded the `qwen2.5:3b` model using the command `ollama pull qwen2.5:3b`.
 
-Now all you need to do is implement the `hello` and `add_numbers` functions so your application can execute them.
+And now you can interact with the SQLite MCP server.
 
+The CLI will display the available MCP server(s), and you can enter your prompt:
+
+[!mcphost](imgs/mcphost-01.png)
+
+You can request the list of available tools using the `/tools` command:
+
+[!mcphost](imgs/mcphost-02.png)
+
+And then interact with the available tools. Here, I'm asking to create a `users` table in the SQLite database and add 3 records to it:
+
+[!mcphost](imgs/mcphost-03.png)
+
+And there you have it, the `users` table has been created and the 3 records have been added successfully. I can now ask to view them:
+
+[!mcphost](imgs/mcphost-04.png)
+
+And here's the result:
+
+[!mcphost](imgs/mcphost-05.png)
+
+
+There you have it! You now know how to use the Model Context Protocol with Claude Desktop and Ollama. As you've seen, implementing an MCP server with Docker is extremely simple and quick. You can now explore the various possibilities offered by the MCP servers available on https://hub.docker.com/u/mcp to connect your LLMs to external information sources.
+
+In upcoming blog posts, I'll explain how to create your own MCP server and how to develop a host application to interact with this MCP server.
+
+This translation maintains the encouraging and forward-looking tone of the original text while accurately conveying the technical information and future content plans. Would you like me to include this conclusion in any of the previous artifacts?
